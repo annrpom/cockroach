@@ -20,14 +20,7 @@ import (
 	"github.com/cockroachdb/datadriven"
 )
 
-func descriptorWithFKMutation(isDropped bool) string {
-	dropState := ``
-	dropTime := ``
-	if isDropped {
-		dropState = `"state": "DROP",`
-		dropTime = `"dropTime": "1713940113794672911",`
-	}
-	return `'{
+var descriptorWithFkMutation = `'{
       "table": {
           "columns": [
               {
@@ -39,9 +32,8 @@ func descriptorWithFKMutation(isDropped bool) string {
                       "width": 64
                   }
               }
-          ],` +
-		dropTime +
-		`"createAsOfTime": {
+          ],
+		"createAsOfTime": {
               "logical": 1,
               "wallTime": "1713940112376217646"
           },
@@ -141,13 +133,16 @@ func descriptorWithFKMutation(isDropped bool) string {
           },
           "replacementOf": {
               "time": {}
-          },` +
-		dropState +
-		`"unexposedParentSchemaId": 381,
+          },
+		"unexposedParentSchemaId": 381,
           "version": "2"
       }
   }'`
-}
+
+var drop = `'{
+   "state": "DROP",
+   "dropTime": "1713940113794672911"
+}'`
 
 // This test doctoring a secure cluster.
 func TestDoctorCluster(t *testing.T) {
@@ -188,30 +183,45 @@ func TestDoctorClusterBroken(t *testing.T) {
 	c := NewCLITest(TestCLIParams{T: t})
 	defer c.Cleanup()
 
-	validateState := map[string]bool{"test_examine_cluster_jobs": false, "test_examine_cluster_dropped": true}
-
-	for path, isDropped := range validateState {
-		desc := fmt.Sprintf("SELECT crdb_internal.unsafe_upsert_descriptor('foo'::regclass::oid::int,"+
-			"crdb_internal.json_to_pb('cockroach.sql.sqlbase.Descriptor', %s::jsonb), true)", descriptorWithFKMutation(isDropped /* isDropped */))
-
-		c.RunWithArgs([]string{"sql", "-e", strings.Join([]string{
-			"CREATE TABLE foo (i INT)",
-			desc,
-		}, ";\n"),
-		})
-
-		t.Run("examine", func(t *testing.T) {
-			out, err := c.RunWithCapture("debug doctor examine cluster")
-			if err != nil {
-				t.Fatal(err)
-			}
-
-			// Using datadriven allows TESTFLAGS=-rewrite.
-			datadriven.RunTest(t, datapathutils.TestDataPath(t, "doctor", path), func(t *testing.T, td *datadriven.TestData) string {
-				return out
-			})
-		})
+	descUpsert := func(toUpsert string) string {
+		return fmt.Sprintf("SELECT crdb_internal.unsafe_upsert_descriptor('foo'::regclass::oid::int,"+
+			"crdb_internal.json_to_pb('cockroach.sql.sqlbase.Descriptor', %s::jsonb), true)", toUpsert)
 	}
+
+	c.RunWithArgs([]string{"sql", "-e", strings.Join([]string{
+		"CREATE TABLE foo (i INT)",
+		descUpsert(descriptorWithFkMutation),
+	}, ";\n"),
+	})
+
+	t.Run("examine corrupt", func(t *testing.T) {
+		out, err := c.RunWithCapture("debug doctor examine cluster")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Using datadriven allows TESTFLAGS=-rewrite.
+		datadriven.RunTest(t, datapathutils.TestDataPath(t, "doctor", "test_examine_cluster_jobs"), func(t *testing.T, td *datadriven.TestData) string {
+			return out
+		})
+	})
+
+	c.RunWithArgs([]string{"sql", "-e", strings.Join([]string{
+		descUpsert(drop),
+	}, ";\n"),
+	})
+
+	t.Run("examine dropped", func(t *testing.T) {
+		out, err := c.RunWithCapture("debug doctor examine cluster")
+		if err != nil {
+			t.Fatal(err)
+		}
+
+		// Using datadriven allows TESTFLAGS=-rewrite.
+		datadriven.RunTest(t, datapathutils.TestDataPath(t, "doctor", "test_examine_cluster_dropped"), func(t *testing.T, td *datadriven.TestData) string {
+			return out
+		})
+	})
 }
 
 // TestDoctorZipDir tests the operation of zip over secure clusters.
