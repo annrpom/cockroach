@@ -122,6 +122,9 @@ func (s *topLevelServer) disableReplication(ctx context.Context) (retErr error) 
 		zone := string(*it.Cur()[0].(*tree.DString))
 		zones = append(zones, zone)
 	}
+	if err != nil {
+		return err
+	}
 
 	for _, zone := range zones {
 		if _, err := ie.Exec(ctx, "set-zone", nil,
