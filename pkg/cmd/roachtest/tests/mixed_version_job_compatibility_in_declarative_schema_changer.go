@@ -15,7 +15,6 @@ import (
 	"math/rand"
 
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/cluster"
-	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/option"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/registry"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/roachtestutil/mixedversion"
 	"github.com/cockroachdb/cockroach/pkg/cmd/roachtest/test"
@@ -78,10 +77,12 @@ func executeSupportedDDLs(
 	// node.
 	if helper.Context().MixedBinary() {
 		if testingUpgradedNodes {
-			// In this case, we test that older nodes are able to adopt desc. jobs from newer nodes.
+			// In this case, we test that older nodes are able to adopt desc. jobs
+			// from newer nodes.
 			nodes = helper.Context().NodesInNextVersion() // N.B. this is the set of upgradedNodes.
 		} else {
-			// In this case, we test that newer nodes are able to adopt desc. jobs from older nodes.
+			// In this case, we test that newer nodes are able to adopt desc. jobs
+			// from older nodes.
 			nodes = helper.Context().NodesInPreviousVersion() // N.B. this is the set of oldNodes.
 		}
 	}
@@ -90,11 +91,24 @@ func executeSupportedDDLs(
 	if err != nil {
 		return err
 	}
-	// Disable job adoption for all nodes of the set we are testing [upgradedNodes, oldNodes] so that the
-	// other respective set can adopt the job (ex. for upgradedNodes, we want the oldNodes to be able to adopt
+	// Disable job adoption for all nodes of the set we are testing
+	// [upgradedNodes, oldNodes] so that the other respective set can adopt the
+	// job (ex. for upgradedNodes, we want the oldNodes to be able to adopt
 	// these jobs).
 	if err := testUtils.disableJobAdoption(ctx, t.L(), nodes); err != nil {
 		return err
+	}
+
+	// Set all nodes to always use declarative schema changer
+	// so that we don't fall back to legacy schema changer implicitly.
+	// Being explicit can help catch bugs that will otherwise be
+	// buried by the fallback.
+	//
+	// We also need to set experimental_enable_unique_without_index_constraints
+	// since we will be testing this syntax.
+	setup := []string{
+		`SET use_declarative_schema_changer = unsafe_always`,
+		`SET experimental_enable_unique_without_index_constraints = true`,
 	}
 
 	// DDLs supported in V23_2.
@@ -151,7 +165,7 @@ func executeSupportedDDLs(
 		`DROP DATABASE testdb2 CASCADE`,
 	}
 
-	ddls := append(v232DDLs, append(v241DDLs, cleanup...)...)
+	ddls := append(setup, append(v232DDLs, append(v241DDLs, cleanup...)...)...)
 
 	for _, ddl := range ddls {
 		if err := helper.ExecWithGateway(r, nodes, ddl); err != nil {
@@ -168,19 +182,15 @@ func runDeclarativeSchemaChangerJobCompatibilityInMixedVersion(
 		ctx, t, t.L(), c, c.All(), mixedversion.NumUpgrades(1),
 	)
 
-	// Set up the testing state (e.g. create a few databases and tables) and always use declarative schema
-	// changer on all nodes. Queries run in this function should be idempotent.
+	// Set up the testing state (e.g. create a few databases and tables) and
+	// always use declarative schema changer on all nodes. Queries run in this
+	// function should be idempotent.
 	testSetupResetStep := func(ctx context.Context, l *logger.Logger, r *rand.Rand, helper *mixedversion.Helper) error {
 
-		// Ensure that the declarative schema changer is off so that we do not get failures related to unimplemented
-		// statements in the dsc.
-		for _, node := range c.All() {
-			if err := helper.ExecWithGateway(r, option.NodeListOption{node}, "SET use_declarative_schema_changer = off"); err != nil {
-				return err
-			}
-		}
-
+		// Ensure that the declarative schema changer is off so that we do not get
+		// failures related to unimplemented statements in the dsc.
 		setUpQuery := `
+SET use_declarative_schema_changer = off;
 CREATE DATABASE IF NOT EXISTS testdb;
 CREATE SCHEMA IF NOT EXISTS testdb.testsc;
 CREATE TABLE IF NOT EXISTS testdb.testsc.t (i INT PRIMARY KEY, j INT NOT NULL, INDEX idx (j), CONSTRAINT check_j CHECK (j > 0));
@@ -196,20 +206,6 @@ CREATE VIEW IF NOT EXISTS testdb.testsc.v AS (SELECT i*2 FROM testdb.testsc.t);
 		if err := helper.Exec(r, setUpQuery); err != nil {
 			return err
 		}
-
-		// Set all nodes to always use declarative schema changer
-		// so that we don't fall back to legacy schema changer implicitly.
-		// Being explicit can help catch bugs that will otherwise be
-		// buried by the fallback.
-		for _, node := range c.All() {
-			if err := helper.ExecWithGateway(r, option.NodeListOption{node}, "SET use_declarative_schema_changer = unsafe_always"); err != nil {
-				return err
-			}
-			// We also need to set experimental_enable_unique_without_index_constraints - since we will be testing this syntax.
-			if err := helper.ExecWithGateway(r, option.NodeListOption{node}, "SET experimental_enable_unique_without_index_constraints = true"); err != nil {
-				return err
-			}
-		}
 		return nil
 	}
 
@@ -220,8 +216,9 @@ CREATE VIEW IF NOT EXISTS testdb.testsc.v AS (SELECT i*2 FROM testdb.testsc.t);
 		// Job backward compatibility test:
 		//   - upgraded nodes: plan schema change and create schema changer jobs
 		//   - older nodes: adopt and execute schema changer jobs
-		// Testing that declarative schema change jobs created by nodes running newer binary version can be adopted and
-		// finished by nodes running older binary versions.
+		// Testing that declarative schema change jobs created by nodes running
+		// newer binary version can be adopted and finished by nodes running older
+		// binary versions.
 		if err := executeSupportedDDLs(ctx, c, t, helper, r, true /* testingUpgradedNodes */); err != nil {
 			return err
 		}
@@ -232,8 +229,9 @@ CREATE VIEW IF NOT EXISTS testdb.testsc.v AS (SELECT i*2 FROM testdb.testsc.t);
 		// Job forward compatibility test:
 		//   - older nodes: plan schema change and create schema changer jobs
 		//   - upgraded nodes: adopt and execute schema changer jobs
-		// Testing that declarative schema change jobs created by nodes running older binary version can be adopted and
-		// finished by nodes running newer binary versions.
+		// Testing that declarative schema change jobs created by nodes running
+		// older binary version can be adopted and finished by nodes running newer
+		// binary versions.
 		return executeSupportedDDLs(ctx, c, t, helper, r, false /* testingUpgradedNodes */)
 	}
 
