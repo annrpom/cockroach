@@ -710,9 +710,17 @@ func (b *Builder) resolveDataSourceRef(
 // of the memo.
 func (b *Builder) checkPrivilege(name opt.MDDepName, ds cat.DataSource, priv privilege.Kind) {
 	if !(priv == privilege.SELECT && b.skipSelectPrivilegeChecks) {
-		err := b.catalog.CheckPrivilege(b.ctx, ds, priv)
-		if err != nil {
-			panic(err)
+		// TODO check for invalid constant or something
+		if b.securityDefiner != 0 {
+			err := b.catalog.CheckPrivilegeForRoutineCreator(b.ctx, ds, priv, b.securityDefiner)
+			if err != nil {
+				panic(err)
+			}
+		} else {
+			err := b.catalog.CheckPrivilege(b.ctx, ds, priv)
+			if err != nil {
+				panic(err)
+			}
 		}
 	} else {
 		// The check is skipped, so don't recheck when dependencies are checked.

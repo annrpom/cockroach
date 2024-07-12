@@ -169,6 +169,9 @@ type Catalog interface {
 	// the given catalog object. If not, then CheckPrivilege returns an error.
 	CheckPrivilege(ctx context.Context, o Object, priv privilege.Kind) error
 
+	// CheckPrivilegeForCreator is like CheckPrivilege, but bleh
+	CheckPrivilegeForRoutineCreator(ctx context.Context, o Object, priv privilege.Kind, oid oid.Oid) error
+
 	// CheckAnyPrivilege verifies that the current user has any privilege on
 	// the given catalog object. If not, then CheckAnyPrivilege returns an error.
 	CheckAnyPrivilege(ctx context.Context, o Object) error

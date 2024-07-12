@@ -52,6 +52,7 @@ go_library(
     deps = [
         "//pkg/clusterversion",
         "//pkg/kv/kvserver/concurrency/isolation",
+        "//pkg/security/username",
         "//pkg/server/telemetry",
         "//pkg/settings",
         "//pkg/sql/catalog/catpb",

@@ -184,6 +184,9 @@ type Builder struct {
 	// subqueryNameIdx helps generate unique subquery names during star
 	// expansion.
 	subqueryNameIdx int
+
+	// TODO
+	securityDefiner oid.Oid
 }
 
 // New creates a new Builder structure initialized with the given

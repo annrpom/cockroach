@@ -351,6 +351,7 @@ func (b *Builder) buildRoutine(
 	b.insideUDF = true
 	b.insideSQLRoutine = o.Language == tree.RoutineLangSQL
 	isSetReturning := o.Class == tree.GeneratorClass
+	b.securityDefiner = o.Oid // TODO this is assigned by default since I am only prototyping.
 
 	// Build an expression for each statement in the function body.
 	var body []memo.RelExpr

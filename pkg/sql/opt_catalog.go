@@ -414,6 +414,25 @@ func (oc *optCatalog) CheckPrivilege(ctx context.Context, o cat.Object, priv pri
 	return oc.planner.CheckPrivilege(ctx, desc, priv)
 }
 
+// CheckPrivilegeForUser is part of the cat.Catalog interface.
+func (oc *optCatalog) CheckPrivilegeForRoutineCreator(
+	ctx context.Context, o cat.Object, priv privilege.Kind, oid oid.Oid,
+) error {
+	funcDesc, err := oc.planner.FunctionDesc(ctx, oid)
+	if err != nil {
+		return err
+	}
+	creator := funcDesc.FuncDesc().Privileges.Owner()
+	if o.ID() == 0 {
+		return oc.planner.CheckPrivilegeForUser(ctx, syntheticprivilege.GlobalPrivilegeObject, priv, creator)
+	}
+	desc, err := getDescFromCatalogObjectForPermissions(o)
+	if err != nil {
+		return err
+	}
+	return oc.planner.CheckPrivilegeForUser(ctx, desc, priv, creator)
+}
+
 // CheckAnyPrivilege is part of the cat.Catalog interface.
 func (oc *optCatalog) CheckAnyPrivilege(ctx context.Context, o cat.Object) error {
 	desc, err := getDescFromCatalogObjectForPermissions(o)

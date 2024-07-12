@@ -270,6 +270,13 @@ func (tc *Catalog) CheckPrivilege(ctx context.Context, o cat.Object, priv privil
 	return tc.CheckAnyPrivilege(ctx, o)
 }
 
+// CheckPrivilegeForUser TODO
+func (tc *Catalog) CheckPrivilegeForRoutineCreator(
+	ctx context.Context, o cat.Object, priv privilege.Kind, oid oid.Oid,
+) error {
+	return tc.CheckAnyPrivilege(ctx, o)
+}
+
 // CheckAnyPrivilege is part of the cat.Catalog interface.
 func (tc *Catalog) CheckAnyPrivilege(ctx context.Context, o cat.Object) error {
 	switch t := o.(type) {
