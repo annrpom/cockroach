@@ -252,7 +252,7 @@ var opFuncs = []func(*operationGenerator, context.Context, pgx.Tx) (*opStmt, err
 
 var opWeights = []int{
 	// Non-DDL
-	insertRow:  10,
+	insertRow:  0, // Disabled and tracked with #127263
 	selectStmt: 10,
 	validate:   2, // validate twice more often
 
@@ -271,7 +271,7 @@ var opWeights = []int{
 	alterTableAlterPrimaryKey:         1,
 	alterTableDropColumn:              1,
 	alterTableDropColumnDefault:       1,
-	alterTableDropConstraint:          1,
+	alterTableDropConstraint:          0, // Disabled and tracked with #127273.
 	alterTableDropNotNull:             1,
 	alterTableDropStored:              1,
 	alterTableLocality:                1,
@@ -281,7 +281,7 @@ var opWeights = []int{
 	alterTypeDropValue:                1,
 	commentOn:                         1,
 	createFunction:                    1,
-	createIndex:                       1,
+	createIndex:                       0, // Disabled and tracked with #127280.
 	createSchema:                      1,
 	createSequence:                    1,
 	createTable:                       10,
