@@ -80,6 +80,10 @@ type operationGenerator struct {
 
 	// useDeclarativeSchemaChanger indices if the declarative schema changer is used.
 	useDeclarativeSchemaChanger bool
+
+	// specifiedTable does its best to constrain the ops to a specific table. This is particularly useful
+	// if we want to test that a sequence of ops on a table leave it sane.
+	specifiedTable *tree.TableName
 }
 
 // OpGenLogQuery a query with a single value result.
@@ -231,10 +235,13 @@ func (og *operationGenerator) randOp(
 }
 
 func (og *operationGenerator) addColumn(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
-
-	tableName, err := og.randTable(ctx, tx, og.pctExisting(true), "")
-	if err != nil {
-		return nil, err
+	tableName := og.specifiedTable
+	if tableName == nil {
+		var err error
+		tableName, err = og.randTable(ctx, tx, og.pctExisting(true), "")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	tableExists, err := og.tableExists(ctx, tx, tableName)
@@ -1605,9 +1612,13 @@ func (og *operationGenerator) createView(ctx context.Context, tx pgx.Tx) (*opStm
 }
 
 func (og *operationGenerator) dropColumn(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
-	tableName, err := og.randTable(ctx, tx, og.pctExisting(true), "")
-	if err != nil {
-		return nil, err
+	tableName := og.specifiedTable
+	if tableName == nil {
+		var err error
+		tableName, err = og.randTable(ctx, tx, og.pctExisting(true), "")
+		if err != nil {
+			return nil, err
+		}
 	}
 
 	tableExists, err := og.tableExists(ctx, tx, tableName)
@@ -2559,8 +2570,24 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 			"'IntFamily', 'StringFamily', 'UuidFamily']), false)"
 	}
 
+	// TODO(before merge): Change the CTE below to support a fully qual
+	// table
+	tableQuery := tableDescQuery
+	if og.specifiedTable != nil {
+		tableQuery = specificTableDescQuery(og.specifiedTable.Table())
+		tableExists, err := og.tableExists(ctx, tx, og.specifiedTable)
+		if err != nil {
+			return nil, err
+		}
+		if !tableExists {
+			return makeOpStmtForSingleError(OpStmtDDL,
+				`ALTER TABLE "NonExistentTable" ALTER PRIMARY KEY USING COLUMNS ("IrrelevantColumn")`,
+				pgcode.UndefinedTable), nil
+		}
+	}
+
 	colQuery := fmt.Sprintf(`
-		SELECT
+    SELECT
 			COALESCE(json_array_length(table_descriptor->'mutations'), 0) > 0 AS table_undergoing_schema_change,
 			quote_ident(schema_id::REGNAMESPACE::TEXT) || '.' || quote_ident(table_name) AS table_name,
 			quote_ident(col->>'name') AS column_name,
@@ -2594,11 +2621,12 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 		FROM columns
 		WHERE NOT (
 			COALESCE((col->'hidden')::bool, false)
-			OR  COALESCE((col->'inaccessible')::bool, false)
+			OR COALESCE((col->'inaccessible')::bool, false)
 		)`, indexableQuery)
+
 	q := With([]CTE{
 		{"descriptors", descJSONQuery},
-		{"tables", tableDescQuery},
+		{"tables", tableQuery},
 		{"columns", colDescQuery},
 	}, colQuery)
 
@@ -2673,10 +2701,6 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 	}
 
 	generationCases := []GenerationCase{
-		// IF EXISTS should noop if the table doesn't exist.
-		{pgcode.SuccessfulCompletion, `ALTER TABLE IF EXISTS "NonExistentTable" ALTER PRIMARY KEY USING COLUMNS ("IrrelevantColumn")`},
-		// Targeting a table that doesn't exist should error out.
-		{pgcode.UndefinedTable, `ALTER TABLE "NonExistentTable" ALTER PRIMARY KEY USING COLUMNS ("IrrelevantColumn")`},
 		// Targeting a column that doesn't exist should error out.
 		{pgcode.UndefinedColumn, `{ with TableNotUnderGoingSchemaChange } ALTER TABLE { .table_name } ALTER PRIMARY KEY USING COLUMNS ("NonExistentColumn") { end }`},
 		// NullableColumns can't be used as PKs.
@@ -2754,6 +2778,19 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 			return table
 		},
 	})
+	// If we aren't targeting a specific table, we can generate error statements
+	// for tables that do not exist.
+	if og.specifiedTable == nil {
+		// IF EXISTS should noop if the table doesn't exist.
+		generationCases = append(generationCases,
+			GenerationCase{pgcode.SuccessfulCompletion,
+				`ALTER TABLE IF EXISTS "NonExistentTable" ALTER PRIMARY KEY USING COLUMNS ("IrrelevantColumn")`},
+			// Targeting a table that doesn't exist should error out.
+			GenerationCase{pgcode.UndefinedTable,
+				`ALTER TABLE "NonExistentTable" ALTER PRIMARY KEY USING COLUMNS ("IrrelevantColumn")`},
+		)
+	}
+
 	if err != nil {
 		return nil, err
 	}
@@ -2775,6 +2812,146 @@ func (og *operationGenerator) alterTableAlterPrimaryKey(
 	opStmt.potentialExecErrors.add(pgcode.DuplicateColumn)
 
 	return opStmt, nil
+}
+
+func (og *operationGenerator) alterTableCommaSyntax(
+	ctx context.Context, tx pgx.Tx,
+) (*opStmt, error) {
+	expectedExecErrors := makeExpectedErrorSet()
+	potentialExecErrors := makeExpectedErrorSet()
+	colsWithStates := make(map[tree.Name]commaOpType)
+
+	getExpectedErrCodes := func(previous commaOpType, target commaOpType) codesWithConditions {
+		addingSameCol := previous == alterTableAddColumnForComma &&
+			target == alterTableAddColumnForComma
+		droppingSameCol := previous == alterTableDropColumnForComma &&
+			target == alterTableDropColumnForComma
+		pkOnDroppingCol := previous == alterTableDropColumnForComma &&
+			target == alterTableAlterPrimaryKeyForComma
+		pkOnAddingCol := previous == alterTableAddColumnForComma &&
+			target == alterTableAlterPrimaryKeyForComma
+
+		return codesWithConditions{
+			{code: pgcode.DuplicateColumn, condition: addingSameCol},
+			{code: pgcode.UndefinedColumn, condition: droppingSameCol},
+			{code: pgcode.ObjectNotInPrerequisiteState, condition: pkOnDroppingCol},
+			{code: pgcode.ObjectNotInPrerequisiteState, condition: pkOnAddingCol},
+		}
+	}
+
+	alterPkExists := false
+	// updateColsWithStates updates our colsWithStates map, updating the
+	// expectedErrCodes associated with the change
+	updateColsWithStates := func(cmds tree.AlterTableCmds) error {
+		for _, cmd := range cmds {
+			switch cmd := cmd.(type) {
+			case *tree.AlterTableAddColumn:
+				val, exists := colsWithStates[cmd.ColumnDef.Name]
+				if exists {
+					expectedExecErrors.addAll(getExpectedErrCodes(val, alterTableAddColumnForComma))
+				}
+				colsWithStates[cmd.ColumnDef.Name] = alterTableAddColumnForComma
+			case *tree.AlterTableAlterPrimaryKey:
+				alterPkExists = true
+				for _, col := range cmd.Columns {
+					val, exists := colsWithStates[col.Column]
+					if exists {
+						expectedExecErrors.addAll(getExpectedErrCodes(val, alterTableAddColumnForComma))
+					}
+					colsWithStates[col.Column] = alterTableAlterPrimaryKeyForComma
+				}
+			case *tree.AlterTableDropColumn:
+				val, exists := colsWithStates[cmd.Column]
+				if exists {
+					expectedExecErrors.addAll(getExpectedErrCodes(val, alterTableAddColumnForComma))
+				}
+				colsWithStates[cmd.Column] = alterTableDropColumnForComma
+			default:
+				return errors.Newf("unsupported AlterTableCmd %T in alterTableCommaSyntax", cmd)
+			}
+		}
+		return nil
+	}
+
+	var ast *tree.AlterTable
+	isMultiplePKsAllowed := og.randIntn(2) == 1
+	// TODO(before merge) i picked a random number here
+	amtCmds := og.randIntn(12) + 2
+	for i := 0; i < amtCmds; i++ {
+		op := commaOpType(og.randIntn(numCommaOpTypes))
+		// If the current operation is altering the PK and a prior alter PK exists,
+		// we will be skipping over the op unless isMultiplePKsAllowed is
+		// specified.
+		if (op == alterTableAlterPrimaryKeyForComma) && alterPkExists {
+			if isMultiplePKsAllowed {
+				potentialExecErrors.add(pgcode.FeatureNotSupported)
+			} else {
+				continue
+			}
+		}
+
+		stmt, err := commaOpFuncs[op](og, ctx, tx)
+		if err != nil {
+			// We can only ignore this error if no other PgErrors
+			// were set in the cleanup process.
+			if errors.Is(err, pgx.ErrNoRows) &&
+				!errors.HasType(err, &pgconn.PgError{}) {
+				continue
+			}
+			return nil, err
+		}
+
+		parsedStmts, err := parser.Parse(stmt.sql)
+		if err != nil {
+			return nil, err
+		}
+
+		for _, s := range parsedStmts {
+			alterTable, ok := s.AST.(*tree.AlterTable)
+			if !ok {
+				return nil, errors.New("failed to cast to *tree.AlterTable: invalid type assertion")
+			}
+			if ast != nil {
+				ast.Cmds = append(ast.Cmds, alterTable.Cmds...)
+				// If the table is dropped mid-constructing and we expect a no-op,
+				// keep the IfExists flag up-to-date.
+				ast.IfExists = ast.IfExists || alterTable.IfExists
+			} else {
+				ast = alterTable
+				tableName := ast.Table.ToTableName()
+				og.specifiedTable = &tableName
+			}
+			// There are several cases where we need to update the list of
+			// expectedExecErrors. Do that now and keep our map up to date.
+			if !ast.IfExists {
+				err = updateColsWithStates(alterTable.Cmds)
+				if err != nil {
+					return nil, err
+				}
+			}
+		}
+		if ast != nil && !ast.IfExists {
+			potentialExecErrors.merge(stmt.potentialExecErrors)
+			expectedExecErrors.merge(stmt.expectedExecErrors)
+		}
+	}
+
+	// If we are unsuccessful generating a statement
+	// (likely due to a lack of tables), let's do this for now.
+	if ast == nil {
+		return makeOpStmtForSingleError(OpStmtDDL,
+				`ALTER TABLE "NonexistentTable" DROP COLUMN "NonexistentColumn1", DROP COLUMN "NonexistentColumn2"`,
+				pgcode.UndefinedTable),
+			nil
+	}
+
+	alterOpStmt := makeOpStmt(OpStmtDDL)
+	alterOpStmt.sql = ast.String()
+	alterOpStmt.expectedExecErrors = expectedExecErrors
+	alterOpStmt.potentialExecErrors = potentialExecErrors
+	og.specifiedTable = nil
+
+	return alterOpStmt, nil
 }
 
 func (og *operationGenerator) survive(ctx context.Context, tx pgx.Tx) (*opStmt, error) {
@@ -3076,9 +3253,7 @@ func makeOpStmt(queryType opStmtType) *opStmt {
 	}
 }
 
-// opStmtFromTree constructs an operation from the provide tree.Statement.
-//
-//lint:ignore U1000 Used in future commits. TODO(chrisseto): Remove the ignore.
+// newOpStmt constructs an operation from the provide tree.Statement.
 func newOpStmt(stmt tree.Statement, expectedExecErrors codesWithConditions) *opStmt {
 	var queryType opStmtType
 	switch stmt.StatementType() {

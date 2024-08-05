@@ -105,6 +105,14 @@ WHERE
 	AND d.refclassid = 'pg_catalog.pg_proc'::REGCLASS::INT8`
 )
 
+// TODO(annie): There might be a problem with how we are selecting
+// this table if we have multiple tables with the same name in different
+// schemas.
+func specificTableDescQuery(tableName string) string {
+	return fmt.Sprintf(`SELECT * FROM descriptors WHERE descriptor ? 'table' AND name = '%s' AND NOT
+(descriptor->'table' ? 'viewQuery' OR descriptor->'table' ? 'sequenceOpts')`, tableName)
+}
+
 func regionsFromDatabaseQuery(database string) string {
 	return fmt.Sprintf(`SELECT * FROM [SHOW REGIONS FROM DATABASE %q]`, database)
 }

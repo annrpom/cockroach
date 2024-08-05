@@ -13,12 +13,19 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// opType is a enum to represent various types of "operations" that are
+// opType is an enum to represent various types of "operations" that are
 // supported by the schemachange workload. Each operation is mapped to a
 // generator function via `opFuncs`.
 //
 //go:generate stringer -type=opType
 type opType int
+
+// commaOpType is an enum to represent various types of "operations" that are
+// supported by the comma syntax in our schemachage workload. Each operation
+// is mapped to a generator function via `commaOpFuncs`.
+//
+//go:generate stringer -type=opType
+type commaOpType int
 
 func init() {
 	// Assert that every opType has a generator function in opFuncs and a weight
@@ -44,6 +51,24 @@ func init() {
 	if len(opFuncs) != numOpTypes {
 		panic(errors.AssertionFailedf(
 			"len(opFuncs) and numOpTypes don't match but a missing operation wasn't found. Did the definition of numOpTypes change?",
+		))
+	}
+
+	// Assert that every commaOpType has a generator function in commaOpFuncs.
+	for op := commaOpType(0); int(op) < numCommaOpTypes; op++ {
+		if commaOpFuncs[op] == nil {
+			panic(errors.AssertionFailedf(
+				"no generator function registered for %q (%d). Did you add an entry to commaOpFuncs?",
+				op,
+				op,
+			))
+		}
+	}
+
+	// Sanity check that numCommaOpTypes represents what we expect it to.
+	if len(commaOpFuncs) != numCommaOpTypes {
+		panic(errors.AssertionFailedf(
+			"len(commaOpFuncs) and numCommaOpTypes don't match but a missing operation wasn't found. Did the definition of numCommaOpTypes change?",
 		))
 	}
 }
@@ -85,6 +110,7 @@ const (
 	alterDatabaseDropSuperRegion // ALTER DATABASE <db> DROP SUPER REGION <region>
 
 	// ALTER FUNCTION ...
+
 	alterFunctionRename    // ALTER FUNCTION <function> RENAME TO <name>
 	alterFunctionSetSchema // ALTER FUNCTION <function> SET SCHEMA <schema>
 
@@ -96,6 +122,7 @@ const (
 	alterTableAddConstraintUnique     // ALTER TABLE <table> ADD CONSTRAINT <constraint> UNIQUE (<column>)
 	alterTableAlterColumnType         // ALTER TABLE <table> ALTER [COLUMN] <column> [SET DATA] TYPE <type>
 	alterTableAlterPrimaryKey         // ALTER TABLE <table> ALTER PRIMARY KEY USING COLUMNS (<columns>)
+	alterTableCommaSyntax             // ALTER TABLE <table> [ALTER PRIMARY KEY USING/ADD COLUMN/DROP COLUMN], ...
 	alterTableDropColumn              // ALTER TABLE <table> DROP COLUMN <column>
 	alterTableDropColumnDefault       // ALTER TABLE <table> ALTER [COLUMN] <column> DROP DEFAULT
 	alterTableDropConstraint          // ALTER TABLE <table> DROP CONSTRAINT <constraint>
@@ -199,6 +226,17 @@ func isDMLOpType(t opType) bool {
 	return t == insertRow || t == selectStmt || t == validate
 }
 
+const (
+	alterTableAddColumnForComma commaOpType = iota
+	alterTableAlterPrimaryKeyForComma
+	alterTableDropColumnForComma
+
+	// numCommaOpTypes contains the total number of commaOpType entries and is used to
+	// perform runtime assertions about various structures that aid in operation
+	// generation.
+	numCommaOpTypes int = iota
+)
+
 var opFuncs = []func(*operationGenerator, context.Context, pgx.Tx) (*opStmt, error){
 	// Non-DDL
 	insertRow:  (*operationGenerator).insertRow,
@@ -219,6 +257,7 @@ var opFuncs = []func(*operationGenerator, context.Context, pgx.Tx) (*opStmt, err
 	alterTableAddConstraintUnique:     (*operationGenerator).addUniqueConstraint,
 	alterTableAlterColumnType:         (*operationGenerator).setColumnType,
 	alterTableAlterPrimaryKey:         (*operationGenerator).alterTableAlterPrimaryKey,
+	alterTableCommaSyntax:             (*operationGenerator).alterTableCommaSyntax,
 	alterTableDropColumn:              (*operationGenerator).dropColumn,
 	alterTableDropColumnDefault:       (*operationGenerator).dropColumnDefault,
 	alterTableDropConstraint:          (*operationGenerator).dropConstraint,
@@ -251,6 +290,12 @@ var opFuncs = []func(*operationGenerator, context.Context, pgx.Tx) (*opStmt, err
 	renameView:                        (*operationGenerator).renameView,
 }
 
+var commaOpFuncs = []func(*operationGenerator, context.Context, pgx.Tx) (*opStmt, error){
+	alterTableAddColumnForComma:       (*operationGenerator).addColumn,
+	alterTableAlterPrimaryKeyForComma: (*operationGenerator).alterTableAlterPrimaryKey,
+	alterTableDropColumnForComma:      (*operationGenerator).dropColumn,
+}
+
 var opWeights = []int{
 	// Non-DDL
 	insertRow:  10,
@@ -265,12 +310,13 @@ var opWeights = []int{
 	alterDatabaseSurvivalGoal:         0, // Disabled and tracked with #83831
 	alterFunctionRename:               1,
 	alterFunctionSetSchema:            1,
-	alterTableAddColumn:               1,
+	alterTableAddColumn:               10,
 	alterTableAddConstraintForeignKey: 1,
 	alterTableAddConstraintUnique:     1,
 	alterTableAlterColumnType:         0, // Disabled and tracked with #66662.
 	alterTableAlterPrimaryKey:         1,
 	alterTableDropColumn:              1,
+	alterTableCommaSyntax:             10,
 	alterTableDropColumnDefault:       1,
 	alterTableDropConstraint:          1,
 	alterTableDropNotNull:             1,
@@ -294,7 +340,7 @@ var opWeights = []int{
 	dropIndex:                         1,
 	dropSchema:                        1,
 	dropSequence:                      1,
-	dropTable:                         1,
+	dropTable:                         0,
 	dropView:                          1,
 	renameIndex:                       1,
 	renameSequence:                    1,
@@ -315,6 +361,7 @@ var opDeclarativeVersion = map[opType]clusterversion.Key{
 	alterTableAddConstraintForeignKey: clusterversion.MinSupported,
 	alterTableAddConstraintUnique:     clusterversion.MinSupported,
 	alterTableAlterPrimaryKey:         clusterversion.MinSupported,
+	alterTableCommaSyntax:             clusterversion.V24_1,
 	alterTableDropColumn:              clusterversion.MinSupported,
 	alterTableDropConstraint:          clusterversion.MinSupported,
 	alterTableDropNotNull:             clusterversion.MinSupported,
