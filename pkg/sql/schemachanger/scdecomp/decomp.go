@@ -11,6 +11,7 @@ import (
 	"reflect"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
+	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/geo/geopb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
@@ -83,6 +84,19 @@ func WalkDescriptor(
 
 func (w *walkCtx) walkRoot() {
 	// Common elements.
+	for _, id := range zonepb.NamedZones {
+		zoneConfig, err := w.zoneConfigReader.GetZoneConfig(w.ctx, catid.DescID(id))
+		if err != nil {
+			panic(err)
+		}
+		if zoneConfig != nil {
+			w.ev(scpb.Status_PUBLIC, &scpb.NamedRangeZoneConfig{
+				RangeID:    catid.DescID(id),
+				ZoneConfig: zoneConfig.ZoneConfigProto(),
+				SeqNum:     0,
+			})
+		}
+	}
 	if !w.desc.SkipNamespace() {
 		w.ev(scpb.Status_PUBLIC, &scpb.Namespace{
 			DatabaseID:   w.desc.GetParentID(),
@@ -424,18 +438,18 @@ func (w *walkCtx) walkRelation(tbl catalog.TableDescriptor) {
 	// operations on tables. To minimize RTT impact limit
 	// this to only tables and materialized views.
 	if (tbl.IsTable() && !tbl.IsVirtualTable()) || tbl.MaterializedView() {
-		zoneCfg, err := w.zoneConfigReader.GetZoneConfig(w.ctx, tbl.GetID())
+		zoneConfig, err := w.zoneConfigReader.GetZoneConfig(w.ctx, tbl.GetID())
 		if err != nil {
 			panic(err)
 		}
-		if zoneCfg != nil {
+		if zoneConfig != nil {
 			w.ev(scpb.Status_PUBLIC,
 				&scpb.TableZoneConfig{
 					TableID:    tbl.GetID(),
-					ZoneConfig: zoneCfg.ZoneConfigProto(),
+					ZoneConfig: zoneConfig.ZoneConfigProto(),
 					SeqNum:     0,
 				})
-			for _, subZoneCfg := range zoneCfg.ZoneConfigProto().Subzones {
+			for _, subZoneCfg := range zoneConfig.ZoneConfigProto().Subzones {
 				w.ev(scpb.Status_PUBLIC,
 					&scpb.IndexZoneConfig{
 						TableID: tbl.GetID(),
@@ -444,7 +458,7 @@ func (w *walkCtx) walkRelation(tbl catalog.TableDescriptor) {
 						SeqNum:  0,
 					})
 			}
-			for _, subZoneCfg := range zoneCfg.ZoneConfigProto().Subzones {
+			for _, subZoneCfg := range zoneConfig.ZoneConfigProto().Subzones {
 				w.ev(scpb.Status_PUBLIC,
 					&scpb.PartitionZoneConfig{
 						TableID:       tbl.GetID(),
