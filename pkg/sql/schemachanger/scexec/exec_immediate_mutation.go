@@ -7,6 +7,7 @@ package scexec
 
 import (
 	"context"
+	"fmt"
 	"sort"
 
 	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
@@ -61,6 +62,7 @@ type zoneConfigToUpdate struct {
 var _ scmutationexec.ImmediateMutationStateUpdater = (*immediateState)(nil)
 
 func (s *immediateState) AddToCheckedOutDescriptors(mut catalog.MutableDescriptor) {
+	fmt.Println(mut)
 	mut.MaybeIncrementVersion()
 	s.modifiedDescriptors.Upsert(mut)
 }

@@ -11,7 +11,6 @@ import (
 	"reflect"
 
 	"github.com/cockroachdb/cockroach/pkg/clusterversion"
-	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/geo/geopb"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog/catenumpb"
@@ -84,19 +83,19 @@ func WalkDescriptor(
 
 func (w *walkCtx) walkRoot() {
 	// Common elements.
-	for _, id := range zonepb.NamedZones {
-		zoneConfig, err := w.zoneConfigReader.GetZoneConfig(w.ctx, catid.DescID(id))
-		if err != nil {
-			panic(err)
-		}
-		if zoneConfig != nil {
-			w.ev(scpb.Status_PUBLIC, &scpb.NamedRangeZoneConfig{
-				RangeID:    catid.DescID(id),
-				ZoneConfig: zoneConfig.ZoneConfigProto(),
-				SeqNum:     0,
-			})
-		}
-	}
+	//for _, id := range zonepb.NamedZones {
+	//	zoneConfig, err := w.zoneConfigReader.GetZoneConfig(w.ctx, catid.DescID(id))
+	//	if err != nil {
+	//		panic(err)
+	//	}
+	//	if zoneConfig != nil {
+	//		w.ev(scpb.Status_PUBLIC, &scpb.NamedRangeZoneConfig{
+	//			RangeID:    catid.DescID(id),
+	//			ZoneConfig: zoneConfig.ZoneConfigProto(),
+	//			SeqNum:     0,
+	//		})
+	//	}
+	//}
 	if !w.desc.SkipNamespace() {
 		w.ev(scpb.Status_PUBLIC, &scpb.Namespace{
 			DatabaseID:   w.desc.GetParentID(),

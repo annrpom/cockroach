@@ -6,6 +6,7 @@
 package scbuildstmt
 
 import (
+	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/server/telemetry"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scerrors"
 	"github.com/cockroachdb/cockroach/pkg/sql/schemachanger/scpb"
@@ -32,14 +33,6 @@ func SetZoneConfig(b BuildCtx, n *tree.SetZoneConfig) {
 			"YAML config is deprecated and not supported in the declarative schema changer"))
 	}
 
-	// TODO(annie): implement complete support for CONFIGURE ZONE. This currently
-	// Supports:
-	// - Database
-	// - Table
-	// - Index
-	// - Partition/row
-	// Left to support:
-	// - System Ranges
 	zco, err := astToZoneConfigObject(b, n)
 	if err != nil {
 		panic(err)
@@ -97,6 +90,23 @@ func astToZoneConfigObject(b BuildCtx, n *tree.SetZoneConfig) (zoneConfigObject,
 			"supported in the DSC")
 	}
 	zs := n.ZoneSpecifier
+
+	// TODO (annie): debugging stuff; discard
+	if n.NamedZone != "" {
+		return nil, scerrors.NotImplementedErrorf(n, "discarding zone configurations is not "+
+			"supported in the DSC")
+	}
+
+	// We are named range.
+	if n.NamedZone != "" {
+		namedZone := zonepb.NamedZone(n.NamedZone)
+		id, found := zonepb.NamedZones[namedZone]
+		if !found {
+			return nil, errors.AssertionFailedf("id %d does not belong to a named zone", id)
+		}
+		return &namedRangeZoneConfigObj{rangeID: catid.DescID(id)}, nil
+	}
+
 	// We are a database object.
 	if n.Database != "" {
 		dbElem := b.ResolveDatabase(zs.Database, ResolveParams{}).FilterDatabase().MustGetOneElement()
