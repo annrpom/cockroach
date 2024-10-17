@@ -91,12 +91,6 @@ func astToZoneConfigObject(b BuildCtx, n *tree.SetZoneConfig) (zoneConfigObject,
 	}
 	zs := n.ZoneSpecifier
 
-	// TODO (annie): debugging stuff; discard
-	if n.NamedZone != "" {
-		return nil, scerrors.NotImplementedErrorf(n, "discarding zone configurations is not "+
-			"supported in the DSC")
-	}
-
 	// We are named range.
 	if n.NamedZone != "" {
 		namedZone := zonepb.NamedZone(n.NamedZone)

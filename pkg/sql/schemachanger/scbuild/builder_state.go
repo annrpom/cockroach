@@ -9,6 +9,7 @@ import (
 	"context"
 	"sort"
 
+	"github.com/cockroachdb/cockroach/pkg/config/zonepb"
 	"github.com/cockroachdb/cockroach/pkg/keys"
 	"github.com/cockroachdb/cockroach/pkg/security/username"
 	"github.com/cockroachdb/cockroach/pkg/sql/catalog"
@@ -49,6 +50,7 @@ var _ scbuildstmt.BuilderState = (*builderState)(nil)
 
 // QueryByID implements the scbuildstmt.BuilderState interface.
 func (b *builderState) QueryByID(id catid.DescID) scbuildstmt.ElementResultSet {
+	// TODO(before merge): figure something out to do about the invalid descID
 	if id == catid.InvalidDescID {
 		return nil
 	}
@@ -1516,6 +1518,13 @@ func (b *builderState) ensureDescriptor(id catid.DescID) {
 		return
 	}
 
+	// For pseudo-table IDs used in named ranges, we don't need to
+	// read the descriptor as it is descriptor-less.
+	for _, pseudoTableID := range zonepb.NamedZones {
+		if uint32(id) == pseudoTableID {
+			return
+		}
+	}
 	c := b.newCachedDesc(id)
 	// Collect privileges
 	if !c.hasOwnership {
